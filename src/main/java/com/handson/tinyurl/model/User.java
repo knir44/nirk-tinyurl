@@ -46,6 +46,7 @@ public class User {
         return Objects.hash(id, name, allUrlClicks);
     }
 
+
     public void setId(String id) {
         this.id = id;
     }

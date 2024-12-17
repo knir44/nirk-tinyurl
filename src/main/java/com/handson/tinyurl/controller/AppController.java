@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.handson.tinyurl.model.NewTinyRequest;
 import com.handson.tinyurl.model.User;
+import com.handson.tinyurl.model.UserClickOut;
+import com.handson.tinyurl.repository.UserClickRepository;
 import com.handson.tinyurl.repository.UserRepository;
 import com.handson.tinyurl.service.Redis;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,10 +17,16 @@ import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.ModelAndView;
 
+import java.util.List;
 import java.util.Random;
+import java.util.stream.Collectors;
+import java.util.Date;
 
 import static com.handson.tinyurl.model.User.UserBuilder.anUser;
+import static com.handson.tinyurl.model.UserClick.UserClickBuilder.anUserClick;
+import static com.handson.tinyurl.model.UserClickKey.UserClickKeyBuilder.anUserClickKey;
 import static com.handson.tinyurl.util.Dates.getCurMonth;
+import static org.springframework.data.util.StreamUtils.createStreamFromIterator;
 
 @RestController
 public class AppController {
@@ -42,6 +50,10 @@ public class AppController {
     @Autowired
     private MongoTemplate mongoTemplate;
 
+    @Autowired
+    private UserClickRepository userClickRepository;
+
+
     @RequestMapping(value = "/user", method = RequestMethod.POST)
     public User createUser(@RequestParam String name) {
         User user = anUser().withName(name).build();
@@ -63,33 +75,67 @@ public class AppController {
 
 
     @RequestMapping(value = "/tiny", method = RequestMethod.POST)
-    public String generate(@RequestBody NewTinyRequest request) throws JsonProcessingException {
+    public String generate(@RequestBody NewTinyRequest request) throws JsonProcessingException
+    {
         String tinyCode = generateTinyCode();
         int i = 0;
-        while (!redis.set(tinyCode, om.writeValueAsString(request)) && i < MAX_RETRIES) {
+
+        while (!redis.set(tinyCode, om.writeValueAsString(request)) && i < MAX_RETRIES)
+        {
             tinyCode = generateTinyCode();
             i++;
         }
-        if (i == MAX_RETRIES) throw new RuntimeException("SPACE IS FULL");
+
+        if (i == MAX_RETRIES)
+        {
+            throw new RuntimeException("SPACE IS FULL");
+        }
+
         return baseUrl + tinyCode + "/";
     }
 
     @RequestMapping(value = "/{tiny}/", method = RequestMethod.GET)
-    public ModelAndView getTiny(@PathVariable String tiny) throws JsonProcessingException {
+    public ModelAndView getTiny(@PathVariable String tiny) throws JsonProcessingException
+    {
         Object tinyRequestStr = redis.get(tiny);
         NewTinyRequest tinyRequest = om.readValue(tinyRequestStr.toString(),NewTinyRequest.class);
-        if (tinyRequest.getLongUrl() != null) {
+
+        if (tinyRequest.getLongUrl() != null)
+        {
             String userName = tinyRequest.getUserName();
-            if ( userName != null) {
+
+            if ( userName != null)
+            {
                 incrementMongoField(userName, "allUrlClicks");
                 incrementMongoField(userName,
                         "shorts."  + tiny + ".clicks." + getCurMonth());
+
+                userClickRepository.save(anUserClick().
+                        userClickKey(anUserClickKey().withUserName(userName).withClickTime(new Date()).build())
+                        .tiny(tiny).longUrl(tinyRequest.getLongUrl()).build());
             }
+
             return new ModelAndView("redirect:" + tinyRequest.getLongUrl());
-        } else {
+        }
+        else
+        {
             throw new RuntimeException(tiny + " not found");
         }
     }
+
+
+    @RequestMapping(value = "/user/{name}/clicks", method = RequestMethod.GET)
+    public List<UserClickOut> getUserClicks(@RequestParam   String name) {
+
+        System.out.println(name);
+        var userClicks = createStreamFromIterator(
+                userClickRepository.findByUserName(name).iterator())
+                .map(userClick -> UserClickOut.of(userClick))
+                .collect(Collectors.toList());
+        return userClicks;
+    }
+
+
     private String generateTinyCode() {
         String charPool = "ABCDEFHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         StringBuilder res = new StringBuilder();
